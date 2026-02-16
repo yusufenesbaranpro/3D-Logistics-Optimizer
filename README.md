@@ -7,6 +7,10 @@ Uses a heuristic **First Fit Decreasing** algorithm with 6-axis rotation support
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.30+-red?logo=streamlit&logoColor=white)
 ![Plotly](https://img.shields.io/badge/Plotly-5.0+-purple?logo=plotly&logoColor=white)
 
+![alt text](image.png)
+
+
+
 ## ✨ Features
 
 - **3D Visualization**: Interactive 3D view of packed bins using Plotly with distinct colors per item.
