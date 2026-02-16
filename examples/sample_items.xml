@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<items>
+    <item>
+        <name>Laptop Box</name>
+        <w>40</w>
+        <h>30</h>
+        <d>10</d>
+        <qty>4</qty>
+    </item>
+    <item>
+        <name>Monitor Box</name>
+        <w>60</w>
+        <h>45</h>
+        <d>20</d>
+        <qty>2</qty>
+    </item>
+    <item>
+        <name>Server Unit</name>
+        <w>50</w>
+        <h>60</h>
+        <d>30</d>
+        <qty>1</qty>
+    </item>
+</items>

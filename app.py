@@ -1,5 +1,8 @@
 import streamlit as st
 import pandas as pd
+import json
+import xml.etree.ElementTree as ET
+from io import BytesIO, StringIO
 from packer import Item, Bin, Packer
 from visualizer import visualize_bin
 import plotly.graph_objects as go
@@ -155,6 +158,27 @@ st.markdown("""
         border-radius: 8px;
     }
     
+    /* File Uploader */
+    [data-testid="stFileUploader"] {
+        background: rgba(30, 42, 74, 0.3);
+        border: 2px dashed rgba(108, 99, 255, 0.3);
+        border-radius: 12px;
+        padding: 12px;
+        transition: border-color 0.3s ease;
+    }
+    [data-testid="stFileUploader"]:hover {
+        border-color: rgba(108, 99, 255, 0.6);
+    }
+    
+    /* Import section highlight */
+    .import-section {
+        background: rgba(30, 42, 74, 0.4);
+        border: 1px solid rgba(108, 99, 255, 0.2);
+        border-radius: 12px;
+        padding: 20px;
+        margin: 10px 0;
+    }
+    
     /* Scrollbar */
     ::-webkit-scrollbar {
         width: 8px;
@@ -174,24 +198,229 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Function to initialize session state
+
+# ─────────────────────────────────────────────────────
+# FILE PARSING UTILITIES
+# ─────────────────────────────────────────────────────
+
+def parse_csv(file) -> pd.DataFrame:
+    """Parse CSV file with auto-detection of separator."""
+    content = file.read().decode('utf-8')
+    # Try comma first, then semicolon
+    for sep in [',', ';', '\t']:
+        try:
+            df = pd.read_csv(StringIO(content), sep=sep)
+            if len(df.columns) >= 3:
+                return df
+        except Exception:
+            continue
+    return pd.read_csv(StringIO(content))
+
+
+def parse_excel(file) -> pd.DataFrame:
+    """Parse Excel (.xlsx / .xls) file."""
+    return pd.read_excel(file, engine='openpyxl')
+
+
+def parse_xml(file) -> pd.DataFrame:
+    """Parse XML file. Expects <items><item> or <bins><bin> structure."""
+    content = file.read().decode('utf-8')
+    root = ET.fromstring(content)
+    
+    records = []
+    # Try to find child elements (item, bin, row, record, etc.)
+    for child in root:
+        record = {}
+        for field in child:
+            tag = field.tag.strip().lower()
+            text = field.text.strip() if field.text else ''
+            # Try numeric conversion
+            try:
+                record[tag] = float(text)
+                if record[tag] == int(record[tag]):
+                    record[tag] = int(record[tag])
+            except (ValueError, TypeError):
+                record[tag] = text
+        if record:
+            records.append(record)
+    
+    return pd.DataFrame(records)
+
+
+def parse_json(file) -> pd.DataFrame:
+    """Parse JSON file. Expects a list of objects."""
+    content = file.read().decode('utf-8')
+    data = json.loads(content)
+    if isinstance(data, list):
+        return pd.DataFrame(data)
+    elif isinstance(data, dict):
+        # Check for common wrapper keys
+        for key in ['items', 'bins', 'data', 'records']:
+            if key in data and isinstance(data[key], list):
+                return pd.DataFrame(data[key])
+        return pd.DataFrame([data])
+    return pd.DataFrame()
+
+
+def parse_uploaded_file(file) -> pd.DataFrame:
+    """Route to correct parser based on file extension."""
+    name = file.name.lower()
+    if name.endswith('.csv'):
+        return parse_csv(file)
+    elif name.endswith(('.xlsx', '.xls')):
+        return parse_excel(file)
+    elif name.endswith('.xml'):
+        return parse_xml(file)
+    elif name.endswith('.json'):
+        return parse_json(file)
+    else:
+        raise ValueError(f"Unsupported file format: {name}")
+
+
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize column names to expected format.
+    
+    Uses keyword-contains matching so columns like 'Width_cm', 
+    'Height_mm', 'Depth_in', 'item_name' are all correctly detected.
+    Priority order ensures exact matches win over partial matches.
+    """
+    # Define mapping rules: (target_name, exact_matches, contains_keywords)
+    rules = [
+        ('name', 
+         {'name', 'item_name', 'item', 'isim', 'ad', 'ürün', 'urun', 'adi', 'adı', 'product', 'label'},
+         ['name', 'item', 'isim', 'ürün', 'urun', 'product', 'label', 'adi', 'adı']),
+        ('w',    
+         {'w', 'width', 'genişlik', 'genislik', 'en'},
+         ['width', 'genişlik', 'genislik']),
+        ('h',    
+         {'h', 'height', 'yükseklik', 'yukseklik', 'boy'},
+         ['height', 'yükseklik', 'yukseklik']),
+        ('d',    
+         {'d', 'depth', 'derinlik', 'uzunluk', 'length'},
+         ['depth', 'derinlik', 'uzunluk', 'length']),
+        ('qty',  
+         {'qty', 'quantity', 'count', 'adet', 'miktar', 'sayi', 'sayı'},
+         ['qty', 'quantity', 'count', 'adet', 'miktar', 'sayi', 'sayı']),
+        ('weight',
+         {'weight', 'agirlik', 'ağırlık'},
+         ['weight', 'agirlik', 'ağırlık']),
+    ]
+    
+    col_map = {}
+    mapped_targets = set()  # Prevent duplicate mappings
+    
+    # Pass 1: Exact matches (highest priority)
+    for col in df.columns:
+        lower = col.strip().lower()
+        for target, exact_set, _ in rules:
+            if target not in mapped_targets and lower in exact_set:
+                col_map[col] = target
+                mapped_targets.add(target)
+                break
+    
+    # Pass 2: Contains-keyword matches (for remaining unmapped columns)
+    for col in df.columns:
+        if col in col_map:
+            continue
+        lower = col.strip().lower()
+        # Remove common suffixes/units for cleaner matching
+        cleaned = lower.replace('_', ' ').replace('-', ' ')
+        for target, _, keywords in rules:
+            if target not in mapped_targets:
+                for kw in keywords:
+                    if kw in cleaned:
+                        col_map[col] = target
+                        mapped_targets.add(target)
+                        break
+                if col in col_map:
+                    break
+    
+    df = df.rename(columns=col_map)
+    return df
+
+
+def validate_items_df(df: pd.DataFrame) -> tuple:
+    """Validate DataFrame for item import. Returns (is_valid, message, cleaned_df)."""
+    required = ['w', 'h', 'd']
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        return False, f"Missing required columns: {', '.join(missing)}. Found: {', '.join(df.columns)}", df
+    
+    # Add defaults
+    if 'name' not in df.columns:
+        df['name'] = [f"Item {i+1}" for i in range(len(df))]
+    if 'qty' not in df.columns:
+        df['qty'] = 1
+    
+    # Convert to numeric
+    for col in ['w', 'h', 'd', 'qty']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Drop rows with NaN in critical columns
+    before = len(df)
+    df = df.dropna(subset=['w', 'h', 'd'])
+    dropped = before - len(df)
+    
+    df['qty'] = df['qty'].fillna(1).astype(int)
+    
+    msg = f"✅ {len(df)} items ready to import."
+    if dropped > 0:
+        msg += f" ({dropped} rows skipped due to invalid data)"
+    
+    return True, msg, df
+
+
+def validate_bins_df(df: pd.DataFrame) -> tuple:
+    """Validate DataFrame for bin import. Returns (is_valid, message, cleaned_df)."""
+    required = ['w', 'h', 'd']
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        return False, f"Missing required columns: {', '.join(missing)}. Found: {', '.join(df.columns)}", df
+    
+    for col in ['w', 'h', 'd']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    before = len(df)
+    df = df.dropna(subset=['w', 'h', 'd'])
+    dropped = before - len(df)
+    
+    msg = f"✅ {len(df)} containers ready to import."
+    if dropped > 0:
+        msg += f" ({dropped} rows skipped due to invalid data)"
+    
+    return True, msg, df
+
+
+# ─────────────────────────────────────────────────────
+# SESSION STATE INIT
+# ─────────────────────────────────────────────────────
+
 if 'bins' not in st.session_state:
-    st.session_state.bins = [] # List of dicts
+    st.session_state.bins = []
 if 'cargo_items' not in st.session_state:
-    # Pre-populate with some examples
     st.session_state.cargo_items = [
         {"name": "Box A", "w": 20, "h": 20, "d": 20, "qty": 3},
         {"name": "Box B", "w": 10, "h": 30, "d": 10, "qty": 5},
     ]
 
+
+# ─────────────────────────────────────────────────────
+# HEADER
+# ─────────────────────────────────────────────────────
+
 st.title("📦 3D LOGISTICS OPTIMIZER")
 st.markdown("*Intelligent 3D bin packing with real-time visualization*")
 st.markdown("---")
 
-# Sidebar
+
+# ─────────────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────────────
+
 with st.sidebar:
     st.header("⚙️ CONFIGURATION")
     
+    # ── Manual Input Section ──
     st.subheader("1. Container (Bin)")
     bin_w = st.number_input("Width", min_value=1.0, value=100.0, key='bin_w')
     bin_h = st.number_input("Height", min_value=1.0, value=50.0, key='bin_h')
@@ -224,7 +453,116 @@ with st.sidebar:
         st.session_state.bins = []
         st.rerun()
 
-# Main Area
+
+# ─────────────────────────────────────────────────────
+# FILE IMPORT SECTION (Main Area — Top)
+# ─────────────────────────────────────────────────────
+
+with st.expander("📁 **Import Data from File** (CSV, Excel, XML, JSON)", expanded=False):
+    st.markdown("""
+    <div style="
+        background: rgba(108, 99, 255, 0.08);
+        border-left: 3px solid #6C63FF;
+        padding: 12px 16px;
+        border-radius: 0 8px 8px 0;
+        margin-bottom: 16px;
+        font-size: 0.9rem;
+    ">
+        <strong>📝 Expected Columns:</strong><br>
+        <b>Items:</b> <code>name</code>, <code>w</code> (width), <code>h</code> (height), <code>d</code> (depth), <code>qty</code> (quantity)<br>
+        <b>Containers:</b> <code>w</code>, <code>h</code>, <code>d</code><br>
+        <em style="color: #7A8599;">Column names are flexible — Turkish names like 'genişlik', 'yükseklik', 'adet' also work.</em>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    imp_col1, imp_col2 = st.columns(2)
+    
+    with imp_col1:
+        st.markdown("##### 📦 Import Items")
+        items_file = st.file_uploader(
+            "Upload items file",
+            type=['csv', 'xlsx', 'xls', 'xml', 'json'],
+            key='items_uploader',
+            help="Supported: CSV, Excel, XML, JSON"
+        )
+        
+        if items_file is not None:
+            try:
+                df = parse_uploaded_file(items_file)
+                df = normalize_columns(df)
+                is_valid, msg, df = validate_items_df(df)
+                
+                if is_valid:
+                    st.success(msg)
+                    st.dataframe(df, use_container_width=True, height=200)
+                    
+                    import_mode = st.radio(
+                        "Import mode:",
+                        ["Append to existing items", "Replace all items"],
+                        key="items_import_mode",
+                        horizontal=True
+                    )
+                    
+                    if st.button("✅ Import Items", key="btn_import_items", use_container_width=True):
+                        new_items = df[['name', 'w', 'h', 'd', 'qty']].to_dict('records')
+                        if import_mode == "Replace all items":
+                            st.session_state.cargo_items = new_items
+                        else:
+                            st.session_state.cargo_items.extend(new_items)
+                        st.success(f"🎉 {len(new_items)} items imported!")
+                        st.rerun()
+                else:
+                    st.error(msg)
+                    st.dataframe(df, use_container_width=True)
+            except Exception as e:
+                st.error(f"❌ Error parsing file: {e}")
+    
+    with imp_col2:
+        st.markdown("##### 🏗️ Import Containers")
+        bins_file = st.file_uploader(
+            "Upload containers file",
+            type=['csv', 'xlsx', 'xls', 'xml', 'json'],
+            key='bins_uploader',
+            help="Supported: CSV, Excel, XML, JSON"
+        )
+        
+        if bins_file is not None:
+            try:
+                df = parse_uploaded_file(bins_file)
+                df = normalize_columns(df)
+                is_valid, msg, df = validate_bins_df(df)
+                
+                if is_valid:
+                    st.success(msg)
+                    st.dataframe(df[['w', 'h', 'd']], use_container_width=True, height=200)
+                    
+                    import_mode = st.radio(
+                        "Import mode:",
+                        ["Append to existing bins", "Replace all bins"],
+                        key="bins_import_mode",
+                        horizontal=True
+                    )
+                    
+                    if st.button("✅ Import Containers", key="btn_import_bins", use_container_width=True):
+                        new_bins = df[['w', 'h', 'd']].to_dict('records')
+                        if import_mode == "Replace all bins":
+                            st.session_state.bins = new_bins
+                        else:
+                            st.session_state.bins.extend(new_bins)
+                        st.success(f"🎉 {len(new_bins)} containers imported!")
+                        st.rerun()
+                else:
+                    st.error(msg)
+                    st.dataframe(df, use_container_width=True)
+            except Exception as e:
+                st.error(f"❌ Error parsing file: {e}")
+
+st.markdown("---")
+
+# ─────────────────────────────────────────────────────
+# MAIN AREA
+# ─────────────────────────────────────────────────────
+
 col_left, col_right = st.columns([1, 2])
 
 with col_left:
@@ -237,7 +575,7 @@ with col_left:
             st.error(f"Error displaying items: {e}")
             st.write("Raw items data:", st.session_state.cargo_items)
     else:
-        st.info("No items added. Use the sidebar to add items.")
+        st.info("No items added. Use the sidebar or import a file.")
         
     st.subheader("🏗️ Container Types")
     if not st.session_state.bins:
@@ -252,10 +590,6 @@ with col_right:
         packer = Packer()
         
         bin_sources = st.session_state.bins if st.session_state.bins else [{"w": bin_w, "h": bin_h, "d": bin_d}]
-        
-        for b in bin_sources:
-            for _ in range(1):
-                 packer.add_bin(Bin("Bin", b['w'], b['h'], b['d']))
         
         if not st.session_state.bins:
              for i in range(5):
