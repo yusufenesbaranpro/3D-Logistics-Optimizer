@@ -1,6 +1,16 @@
 # 📦 3D Logistics Optimizer
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://3d-logistics-optimizer.streamlit.app/)
+<div align="center">
+  <a href="https://3d-logistics-optimizer.streamlit.app/">
+    <img src="https://static.streamlit.io/badges/streamlit_badge_black_white.svg" width="300" alt="Streamlit App">
+  </a>
+  <br>
+  <a href="https://3d-logistics-optimizer.streamlit.app/">
+    <h2 style="border-bottom: none;">3D Logistics Optimizer</h2>
+    <h3>🚀 3D Logistics Optimizer</h3>
+  </a>
+  <p><i>Konya Technical University - Information Technology Applications Project</i></p>
+</div>
 
 A professional 3D Bin Packing optimization application built with Python and Streamlit.
 Uses a heuristic **First Fit Decreasing** algorithm with 6-axis rotation support to pack items into containers efficiently.
