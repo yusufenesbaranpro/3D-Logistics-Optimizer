@@ -3,8 +3,27 @@ import numpy as np
 from typing import List
 from packer import Bin, Item
 
+# Vibrant color palette for items
+ITEM_COLORS = [
+    '#6C63FF',  # Purple
+    '#00D2FF',  # Cyan
+    '#FF6B6B',  # Coral Red
+    '#FFD93D',  # Golden Yellow
+    '#6BCB77',  # Green
+    '#FF8C42',  # Orange
+    '#A855F7',  # Violet
+    '#EC4899',  # Pink
+    '#14B8A6',  # Teal
+    '#F97316',  # Amber
+    '#8B5CF6',  # Lavender
+    '#06B6D4',  # Sky
+    '#EF4444',  # Red
+    '#22C55E',  # Emerald
+    '#FACC15',  # Yellow
+]
 
-def get_cube_mesh(item: Item, color='#CCCCCC', opacity=1.0):
+
+def get_cube_mesh(item: Item, color='#6C63FF', opacity=0.75):
     x, y, z = item.position
     dx, dy, dz = item.get_dimension()
     
@@ -20,7 +39,8 @@ def get_cube_mesh(item: Item, color='#CCCCCC', opacity=1.0):
         alphahull=0,
         flatshading=True,
         name=item.name,
-        hoverinfo='name'
+        hoverinfo='name',
+        hovertext=f"{item.name}<br>{dx:.0f}×{dy:.0f}×{dz:.0f}"
     ), X, Y, Z
 
 def get_cube_wireframe(X, Y, Z, color='white'):
@@ -46,36 +66,76 @@ def visualize_bin(bin: Bin):
     
     W, H, D = bin.width, bin.height, bin.depth
     
-    # Konteyner köşe noktaları
+    # Container corner points
     BX = [0, W, W, 0, 0, W, W, 0]
     BY = [0, 0, H, H, 0, 0, H, H]
     BZ = [0, 0, 0, 0, D, D, D, D]
     
-    # Konteyner çerçevesi
-    bin_wire = get_cube_wireframe(BX, BY, BZ, color='white')
-    bin_wire.line.width = 4
+    # Container wireframe — soft blue glow
+    bin_wire = get_cube_wireframe(BX, BY, BZ, color='rgba(108, 99, 255, 0.6)')
+    bin_wire.line.width = 3
     fig.add_trace(bin_wire)
     
-    # Yerleştirilen kutuları çiz
-    for item in bin.items:
-        mesh, X, Y, Z = get_cube_mesh(item, color='#FAFAFA', opacity=0.8)
-        wire = get_cube_wireframe(X, Y, Z, color='#111111')
-        wire.line.width = 3
+    # Draw packed items with distinct colors
+    for idx, item in enumerate(bin.items):
+        color = ITEM_COLORS[idx % len(ITEM_COLORS)]
+        mesh, X, Y, Z = get_cube_mesh(item, color=color, opacity=0.7)
+        # Slightly brighter wireframe for edge definition
+        wire_color = 'rgba(255, 255, 255, 0.4)'
+        wire = get_cube_wireframe(X, Y, Z, color=wire_color)
+        wire.line.width = 1.5
         
         fig.add_trace(mesh)
         fig.add_trace(wire)
     
-    # Grafik düzeni ayarları - sadece temel özellikler kullanılıyor
+    # Layout — dark blue background matching the app theme
     fig.update_layout(
         scene=dict(
-            xaxis=dict(title='Width', showbackground=False, showgrid=False, showline=False, zeroline=False, visible=True),
-            yaxis=dict(title='Height', showbackground=False, showgrid=False, showline=False, zeroline=False, visible=True),
-            zaxis=dict(title='Depth', showbackground=False, showgrid=False, showline=False, zeroline=False, visible=True),
+            xaxis=dict(
+                title='Width',
+                showbackground=True,
+                backgroundcolor='rgba(15, 22, 41, 0.5)',
+                showgrid=True,
+                gridcolor='rgba(108, 99, 255, 0.08)',
+                showline=False,
+                zeroline=False,
+                visible=True,
+                color='#7A8599'
+            ),
+            yaxis=dict(
+                title='Height',
+                showbackground=True,
+                backgroundcolor='rgba(15, 22, 41, 0.5)',
+                showgrid=True,
+                gridcolor='rgba(108, 99, 255, 0.08)',
+                showline=False,
+                zeroline=False,
+                visible=True,
+                color='#7A8599'
+            ),
+            zaxis=dict(
+                title='Depth',
+                showbackground=True,
+                backgroundcolor='rgba(15, 22, 41, 0.5)',
+                showgrid=True,
+                gridcolor='rgba(108, 99, 255, 0.08)',
+                showline=False,
+                zeroline=False,
+                visible=True,
+                color='#7A8599'
+            ),
             aspectmode='data'
         ),
         margin=dict(l=0, r=0, b=0, t=0),
-        paper_bgcolor='black',
-        plot_bgcolor='black',
-        font=dict(color='white')
+        paper_bgcolor='#0B1120',
+        plot_bgcolor='#0B1120',
+        font=dict(color='#C8D0E0', family='Inter'),
+        showlegend=True,
+        legend=dict(
+            bgcolor='rgba(26, 35, 64, 0.7)',
+            bordercolor='rgba(108, 99, 255, 0.2)',
+            borderwidth=1,
+            font=dict(color='#E0E6F0')
+        )
     )
     return fig
